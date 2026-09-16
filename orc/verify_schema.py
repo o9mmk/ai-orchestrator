@@ -36,6 +36,7 @@ VERIFY_SCHEMA: dict[str, Any] = {
                     "candidate_result",
                     "classification",
                     "log_digest",
+                    "limits",
                 ],
                 "properties": {
                     "name": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -71,6 +72,21 @@ VERIFY_SCHEMA: dict[str, Any] = {
                         ]
                     },
                     "log_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    # gate実行時にresource上限が実際に効いていたか。監査記録から
+                    # 「上限なしで得た結果」を後から判別できるようにするために残す。
+                    "limits": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["verified", "unsupported"],
+                        "properties": {
+                            "verified": {"type": "boolean"},
+                            "unsupported": {
+                                "type": "array",
+                                "maxItems": 16,
+                                "items": {"type": "string", "minLength": 1, "maxLength": 64},
+                            },
+                        },
+                    },
                 },
             },
         },

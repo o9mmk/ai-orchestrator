@@ -6,7 +6,7 @@ from pathlib import Path
 
 from orc.baseline import BaselineVerifier, GateClassification, GateSpec
 from orc.preflight import PreflightConfig, PreflightService, ToolInfo
-from orc.sandbox import SandboxRunner
+from orc.sandbox import PLATFORM_UNENFORCEABLE_LIMITS, SandboxRunner
 from orc.state_machine import RunState
 from orc.worktree import WorktreeManager
 from tests.helpers import manifest_data
@@ -82,7 +82,11 @@ def test_preflight_worktree_sandbox_baseline_flow(repo: Path) -> None:
     )
     baseline_tree = worktrees.create("baseline", base_commit)
     candidate_tree = worktrees.create("candidate", base_commit)
-    decision = BaselineVerifier(stage1.store, SandboxRunner()).verify(
+    decision = BaselineVerifier(
+        stage1.store,
+        SandboxRunner(),
+        allow_unenforced_limits=PLATFORM_UNENFORCEABLE_LIMITS,
+    ).verify(
         GateSpec(
             "python-smoke",
             (

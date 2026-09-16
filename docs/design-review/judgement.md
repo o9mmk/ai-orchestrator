@@ -1,8 +1,8 @@
 # ブラインド比較審査結果（Claude審査員・2026-07-16）
 
 - 審査プロンプト: judge/JUDGE_PROMPT.md
-- 対象: judge/DESIGN_A.md ／ judge/DESIGN_B.md
-- 基準正本: ../FABLE_INDEPENDENT_DESIGN_BRIEF.md
+- 対象: design-a.md ／ design-b.md
+- 基準正本: design-brief.md
 
 ---
 

@@ -120,6 +120,31 @@ def test_platform_rejected_limit_is_reported_not_swallowed(tmp_path: Path) -> No
     # macOSはRLIMIT_ASを実質サポートしないため、既定のmemory_bytesは適用できない。
     result = SandboxRunner().run([sys.executable, "-c", "pass"], worktree, timeout_seconds=30)
     assert result.exit_code == 0
-    assert "UNVERIFIED" not in result.unsupported_limits
+    assert result.limits_verified is True
     if sys.platform == "darwin":
+        assert "RLIMIT_AS" in result.unsupported_limits
+
+
+def test_limit_report_is_not_writable_by_the_inspected_process(tmp_path: Path) -> None:
+    """封じ込め状況の報告を、被検査プロセスがworktree経由で改ざんできないこと。
+
+    報告をworktree内に置いていた頃は、profileがworktree配下への書込みを許すため
+    子プロセスが報告を空にでき、親が「未適用ゼロ」と誤読できた。
+    """
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    # 子はworktree配下を全て走査し、見つけた報告らしきファイルを空にしようとする。
+    sabotage = (
+        "import pathlib\n"
+        "for p in pathlib.Path('.').rglob('*'):\n"
+        "    if p.is_file():\n"
+        "        try:\n"
+        "            p.write_text('')\n"
+        "        except OSError:\n"
+        "            pass\n"
+    )
+    result = SandboxRunner().run([sys.executable, "-c", sabotage], worktree, timeout_seconds=30)
+    assert result.limits_verified is True
+    if sys.platform == "darwin":
+        # 改ざんを試みても、報告はworktree外にあるため実態どおりのまま残る。
         assert "RLIMIT_AS" in result.unsupported_limits

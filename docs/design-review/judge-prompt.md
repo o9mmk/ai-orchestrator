@@ -6,8 +6,8 @@
 
 ## 読むファイル（この3つ以外は一切読まない。ディレクトリ一覧も取らない）
 1. 審査基準の正本: docs/design-review/design-brief.md（特に「最重要の懸念」6件と「品質条件」）
-2. 案A: /tmp/orc-judge/DESIGN_A.md
-3. 案B: /tmp/orc-judge/DESIGN_B.md
+2. 案A: design-a.md
+3. 案B: design-b.md
 
 Git履歴・過去会話・他のローカルファイルは読まない。実装・ファイル編集・git操作・外部操作はしない。出力はチャット応答のみ。
 

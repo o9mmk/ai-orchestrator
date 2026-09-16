@@ -31,13 +31,21 @@ Codex / Claude を子プロセスとして起動して plan → 実装 → revie
 | process ledger + cancel | 停止したはずの子プロセスの残留 | `process_ledger.py`, `cancel.py` |
 | quarantine | 壊れた状態のまま再開する | `quarantine.py` |
 | resume / checkpoint | 中断した run の再実行による二重適用 | `resume.py`, `checkpoint.py` |
+| 上限の不成立検知 | 資源上限が効かないまま PASS すること | `baseline.py` の `limits_enforced` |
 
 budget は soft cap で警告、hard cap で実際に起動を遮断する二段構成にした。
 見積りが hard cap を超える規模は L へ昇格し、`approve` を挟まないと進まない。
 
-resource 上限はプラットフォームによって適用できないものがある（macOS の `RLIMIT_AS` など）。
-適用できなかった上限は握り潰さず `SandboxResult.unsupported_limits` に載せて返す。
-「上限を課したつもり」で untrusted process を走らせないための扱いである。
+resource 上限はプラットフォームによって構造的に適用できないものがある。macOS の `RLIMIT_AS`
+がそれで、`setrlimit` が失敗するためメモリ上限は強制されない。この事実は
+`PLATFORM_UNENFORCEABLE_LIMITS` として明示的に宣言し、それ以外の上限が未適用だった場合と、
+適用状況そのものを回収できなかった場合は、gate が `INCONCLUSIVE` を返して人間の判断へ送る。
+適用状況は `verify.json` の `gates[].limits` に必ず記録するので、監査記録から
+「上限なしで得た結果」を後から判別できる。
+
+この報告は worktree の外に置く。sandbox profile は worktree 配下への書き込みを
+untrusted process へ許可しているため、報告を worktree 内に置くと、封じ込めが効いているかの
+記録を被検査プロセス自身が書き換えられてしまう。
 
 ## 使い方
 
@@ -87,7 +95,7 @@ ledger 済みの process group を TERM → grace → KILL で停止してから
 ## 開発
 
 ```bash
-uv run pytest        # テスト 37 ファイル
+uv run pytest        # 308 tests
 uv run ruff check .
 uv run mypy          # strict
 ```

@@ -1,7 +1,7 @@
 # AI Orchestrator MVP 最終設計書
 
-- ステータス: Final Design v1.0(実装承認待ち)
-- 確定入力: FABLE_INDEPENDENT_DESIGN_BRIEF.md / DESIGN_A.md / DESIGN_B.md
+- ステータス: Final Design v1.0(実装済み。実装はorc/配下、受入対応はacceptance-matrix.mdを参照)
+- 確定入力: design-review/design-brief.md / design-review/design-a.md / design-review/design-b.md
 - 採用判断: Bベース統合(確定済み・本書で再審しない)
 
 ## 1. 結論

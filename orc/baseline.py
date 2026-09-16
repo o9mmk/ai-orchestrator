@@ -55,6 +55,8 @@ class GateRun:
     log_digest: str
     denial_detected: bool
     profile_id: str
+    unsupported_limits: tuple[str, ...] = ()
+    limits_verified: bool = False
 
     @classmethod
     def from_sandbox(cls, result: SandboxResult) -> GateRun:
@@ -65,7 +67,20 @@ class GateRun:
             result.log_digest,
             result.denial_detected,
             result.profile_id,
+            result.unsupported_limits,
+            result.limits_verified,
         )
+
+    def limits_enforced(self, allowed_unenforced: frozenset[str]) -> bool:
+        """このgate実行が、宣言した資源上限のもとで走ったと言えるかを返す。
+
+        allowed_unenforcedは「この上限は効かなくても続行してよい」と運用者が
+        明示的に許可したlimit名の集合である。許可していない上限が未適用の場合と、
+        適用状況そのものを確認できなかった場合は、結果を信用しない。
+        """
+        if not self.limits_verified:
+            return False
+        return not (set(self.unsupported_limits) - allowed_unenforced)
 
 
 @dataclass(frozen=True)
@@ -117,6 +132,16 @@ class GateDecision:
             },
             "classification": self.classification.value,
             "log_digest": combined_digest,
+            "limits": {
+                "verified": all(run.limits_verified for run in (self.baseline, *self.candidate_attempts)),
+                "unsupported": sorted(
+                    {
+                        limit
+                        for run in (self.baseline, *self.candidate_attempts)
+                        for limit in run.unsupported_limits
+                    }
+                ),
+            },
         }
 
 
@@ -138,9 +163,18 @@ class GateRunner(Protocol):
 class BaselineVerifier:
     """baseline cacheとcandidate rerunを決定論的に制御する。"""
 
-    def __init__(self, store: RunStateStore, runner: GateRunner) -> None:
+    def __init__(
+        self,
+        store: RunStateStore,
+        runner: GateRunner,
+        *,
+        allow_unenforced_limits: frozenset[str] = frozenset(),
+    ) -> None:
         self.store = store
         self.runner = runner
+        # 既定は空集合＝どの資源上限の不成立も許さない。macOSのRLIMIT_AS等、
+        # platform都合で効かない上限を承知で走らせる場合だけ運用者がここへ明示する。
+        self.allow_unenforced_limits = allow_unenforced_limits
 
     def verify(
         self,
@@ -172,6 +206,12 @@ class BaselineVerifier:
                 classification = GateClassification.REGRESSION
             else:
                 classification = GateClassification.BASELINE_FAILED
+        if not all(
+            run.limits_enforced(self.allow_unenforced_limits) for run in (baseline, *attempts)
+        ):
+            # 資源上限が効いていない状態で得た結果をPASSにすると、
+            # 「上限を課したつもり」のまま先へ進んでしまう。人間の判断へ送る。
+            classification = GateClassification.INCONCLUSIVE
         return GateDecision(spec, baseline, tuple(attempts), classification)
 
     def _baseline(self, spec: GateSpec, base_commit: str, worktree: Path) -> GateRun:
@@ -208,7 +248,15 @@ class BaselineVerifier:
 
     def _cached_run(self, cached: dict[str, Any]) -> GateRun:
         result = cached.get("result")
-        required = {"exit_code", "timed_out", "log_digest", "denial_detected", "profile_id"}
+        required = {
+            "exit_code",
+            "timed_out",
+            "log_digest",
+            "denial_detected",
+            "profile_id",
+            "unsupported_limits",
+            "limits_verified",
+        }
         if not isinstance(result, dict) or set(result) != required:
             raise TamperDetected("tamper_detected: invalid baseline cache result")
         if (
@@ -223,4 +271,12 @@ class BaselineVerifier:
             or any(character not in "0123456789abcdef" for character in result["log_digest"])
         ):
             raise TamperDetected("tamper_detected: invalid baseline log digest")
-        return GateRun(**result)
+        limits = result["unsupported_limits"]
+        if (
+            not isinstance(limits, list)
+            or any(not isinstance(limit, str) for limit in limits)
+            or not isinstance(result["limits_verified"], bool)
+        ):
+            raise TamperDetected("tamper_detected: invalid baseline limit report")
+        # JSON往復でtupleがlistになるため、dataclassの型へ戻してから復元する。
+        return GateRun(**{**result, "unsupported_limits": tuple(limits)})

@@ -2,7 +2,7 @@
 
 - 設計者: Claude Fable 5（model id: `claude-fable-5`）
 - 作成日: 2026-07-16
-- 前提: `FABLE_INDEPENDENT_DESIGN_BRIEF.md` のみ。REQUIREMENTS.md / ai-arch / 過去設計案 / Git履歴は未参照（独立設計）。
+- 前提: `design-brief.md` のみ。REQUIREMENTS.md / ai-arch / 過去設計案 / Git履歴は未参照（独立設計）。
 
 ---
 

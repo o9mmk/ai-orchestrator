@@ -8,7 +8,7 @@ import pytest
 
 from orc.baseline import BaselineVerifier, GateAction, GateClassification, GateSpec
 from orc.lease import LeaseManager
-from orc.sandbox import SandboxResult, SandboxRunner
+from orc.sandbox import PLATFORM_UNENFORCEABLE_LIMITS, SandboxResult, SandboxRunner
 from orc.store import RunStateStore
 from tests.helpers import manifest_data
 
@@ -23,6 +23,8 @@ def sandbox_result(exit_code: int, *, timed_out: bool = False) -> SandboxResult:
         stderr="",
         profile_id="test-profile",
         denial_detected=False,
+        # 上限が適用され、その適用状況を回収できた実行を表す。
+        limits_verified=True,
     )
 
 
@@ -214,7 +216,11 @@ def test_baseline_gate_runs_inside_real_sandbox(store: RunStateStore, tmp_path: 
         timeout_seconds=10,
     )
 
-    decision = BaselineVerifier(store, SandboxRunner()).verify(
+    decision = BaselineVerifier(
+        store,
+        SandboxRunner(),
+        allow_unenforced_limits=PLATFORM_UNENFORCEABLE_LIMITS,
+    ).verify(
         gate,
         "a" * 40,
         base,
@@ -223,3 +229,62 @@ def test_baseline_gate_runs_inside_real_sandbox(store: RunStateStore, tmp_path: 
 
     assert decision.classification is GateClassification.PASS
     assert (store.run_dir / "baseline" / ("a" * 40) / "gate-python-smoke.json").is_file()
+
+
+def _result(**overrides: object) -> SandboxResult:
+    """limit適用状況だけを差し替えた最小結果を返す。"""
+    base = {
+        "command": ("pytest", "-q"),
+        "exit_code": 0,
+        "timed_out": False,
+        "stdout": "",
+        "stderr": "",
+        "profile_id": "test-profile",
+        "denial_detected": False,
+    }
+    return SandboxResult(**{**base, **overrides})  # type: ignore[arg-type]
+
+
+def test_unenforced_limit_is_not_allowed_to_pass(
+    store: RunStateStore, tmp_path: Path
+) -> None:
+    """許可していない上限が未適用なら、gateはPASSにせず人間の判断へ送る。"""
+    unlimited = _result(unsupported_limits=("RLIMIT_NPROC",), limits_verified=True)
+    classification, _runner = verify(store, tmp_path, [unlimited], [unlimited])
+    assert classification is GateClassification.INCONCLUSIVE
+
+
+def test_unverifiable_limit_report_is_not_treated_as_enforced(
+    store: RunStateStore, tmp_path: Path
+) -> None:
+    """適用状況を確認できなかった実行を「未適用ゼロ」と読み替えないこと。"""
+    unverified = _result(unsupported_limits=(), limits_verified=False)
+    classification, _runner = verify(store, tmp_path, [unverified], [unverified])
+    assert classification is GateClassification.INCONCLUSIVE
+
+
+def test_platform_unenforceable_limit_is_recorded_in_the_audit_trail(
+    store: RunStateStore, tmp_path: Path
+) -> None:
+    """明示的に許可した上限で走った場合も、その事実をverify.jsonへ残す。"""
+    degraded = _result(unsupported_limits=("RLIMIT_AS",), limits_verified=True)
+    base = tmp_path / "base"
+    candidate = tmp_path / "candidate"
+    base.mkdir()
+    candidate.mkdir()
+    runner = SequenceRunner({base: [degraded], candidate: [degraded]})
+    decision = BaselineVerifier(
+        store,
+        runner,
+        allow_unenforced_limits=frozenset({"RLIMIT_AS"}),
+    ).verify(
+        GateSpec("pytest", ("pytest", "-q"), timeout_seconds=10),
+        base_commit="a" * 40,
+        base_worktree=base,
+        candidate_worktree=candidate,
+    )
+    assert decision.classification is GateClassification.PASS
+    assert decision.as_verify_gate()["limits"] == {
+        "verified": True,
+        "unsupported": ["RLIMIT_AS"],
+    }

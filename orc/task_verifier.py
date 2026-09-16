@@ -14,7 +14,7 @@ from orc.artifact_ingest import ArtifactIngestor
 from orc.baseline import BaselineVerifier, GateDecision, GateSpec
 from orc.candidate import CandidatePatch
 from orc.errors import VerificationError
-from orc.sandbox import SandboxRunner
+from orc.sandbox import PLATFORM_UNENFORCEABLE_LIMITS, SandboxRunner
 from orc.store import RunStateStore
 from orc.verifier import (
     SecretScan,
@@ -42,10 +42,14 @@ class TaskVerifierService:
         ingestor: ArtifactIngestor,
         *,
         runner: SandboxRunner | None = None,
+        allow_unenforced_limits: frozenset[str] = PLATFORM_UNENFORCEABLE_LIMITS,
     ) -> None:
         self.store = store
         self.ingestor = ingestor
         self.runner = runner or SandboxRunner()
+        # 既定はplatformが強制できない上限だけを許す。これ以外の未適用と、
+        # 適用状況を確認できなかった実行はgate側でINCONCLUSIVEへ落ちる。
+        self.allow_unenforced_limits = allow_unenforced_limits
 
     def verify(
         self,
@@ -73,7 +77,11 @@ class TaskVerifierService:
             baseline_id,
             base_commit,
         )
-        verifier = BaselineVerifier(self.store, self.runner)
+        verifier = BaselineVerifier(
+            self.store,
+            self.runner,
+            allow_unenforced_limits=self.allow_unenforced_limits,
+        )
         decisions = tuple(
             verifier.verify(spec, base_commit, baseline.path, candidate.path) for spec in specs
         )

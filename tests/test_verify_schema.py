@@ -24,6 +24,7 @@ def valid_report() -> dict[str, object]:
                 "candidate_result": {"attempts": [{"exit_code": 0, "timed_out": False}]},
                 "classification": "PASS",
                 "log_digest": "a" * 64,
+                "limits": {"verified": True, "unsupported": []},
             }
         ],
         "scope_check": {"patch_files": ["src/a.py"], "in_scope": True},

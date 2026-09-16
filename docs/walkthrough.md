@@ -35,14 +35,14 @@ schema済みの固定planを使う場合は`--plan-file plan.json`を指定し�
 
 ## 検証結果
 
-- `uv run --isolated --locked pytest ai-orchestrator/tests/ -x --tb=short`: 295 passed
-- `uv run --isolated --locked ruff check ai-orchestrator/orc ai-orchestrator/tests`: passed
-- `uv run --isolated --locked mypy ai-orchestrator/orc`: strict mode passed
+- `uv run --isolated --locked pytest`: 308 passed
+- `uv run --isolated --locked ruff check .`: passed
+- `uv run --isolated --locked mypy`: strict mode passed
 - `uv lock --check`: passed
 - CLI package smoke: `uv run orc --help` passed
 - 実Codex `0.144.1`: Planner + implementerを最大2 invocationで完走し`AWAITING_APPROVAL`、
   その後に通常cancel/gcで一時runを回収
-- AT-1〜21の対応nodeは`ACCEPTANCE_MATRIX.md`に固定
+- AT-1〜21の対応nodeは`acceptance-matrix.md`に固定
 - staged commit前gate: gitleaks / GlassWorm / pre-commitを実行する
 
 ## 安全境界

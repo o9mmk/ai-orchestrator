@@ -7,6 +7,7 @@ import os
 import resource
 import signal
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,14 @@ class SandboxLimits:
     disk_growth_bytes: int = 1024**3
 
 
+# platformが構造的に強制できないresource上限。運用者の選択ではなくOSの制約なので、
+# 実行ごとの判断に委ねず、ここで一度だけ名前を付けて宣言する。
+# macOSはRLIMIT_ASを実質サポートしておらず、setrlimitがValueErrorになる。
+PLATFORM_UNENFORCEABLE_LIMITS: frozenset[str] = (
+    frozenset({"RLIMIT_AS"}) if sys.platform == "darwin" else frozenset()
+)
+
+
 @dataclass(frozen=True)
 class SandboxResult:
     """sandbox commandの非永続raw結果。"""
@@ -40,6 +49,9 @@ class SandboxResult:
     denial_detected: bool
     # platformが適用を拒否したresource上限。空でない場合、その上限は効いていない。
     unsupported_limits: tuple[str, ...] = ()
+    # childのlimit適用報告を回収できたか。Falseは「上限が効いている保証がない」を意味する。
+    # 既定をFalseにしてあるのは、報告を確認していない経路を「適用済み」と誤読させないため。
+    limits_verified: bool = False
 
     @property
     def log_digest(self) -> str:
@@ -134,15 +146,18 @@ def _limit_process(limits: SandboxLimits, report_path: Path) -> None:
     report_path.write_text("\n".join(unapplied), encoding="utf-8")
 
 
-def _read_unapplied_limits(report_path: Path) -> tuple[str, ...]:
-    """childが残した未適用limitの報告を読む。報告が無い場合は上限適用を確認できないとみなす。"""
+def _read_unapplied_limits(report_path: Path) -> tuple[tuple[str, ...], bool]:
+    """childが残したlimit適用報告を読み、(未適用limit名, 回収できたか)を返す。
+
+    報告が読めない場合に空tupleだけを返すと「未適用ゼロ＝全て適用できた」と区別が付かない。
+    確認できたかどうかを 第2要素で分けて返し、呼び出し側が取り違えられないようにする。
+    """
     try:
         raw = report_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        # forkはしたがpreexec_fnが最後まで走らなかった場合。
-        # 「全て適用できた」と誤って扱わないよう、確認不能として明示する。
-        return ("UNVERIFIED",)
-    return tuple(line for line in raw.splitlines() if line)
+    except (OSError, ValueError, UnicodeDecodeError):
+        # forkはしたがpreexec_fnが最後まで走らなかった、報告が壊れている等。
+        return ((), False)
+    return tuple(line for line in raw.splitlines() if line), True
 
 
 class SandboxRunner:
@@ -198,33 +213,45 @@ class SandboxRunner:
             )
             (temp_root / "home").mkdir()
             (temp_root / "tmp").mkdir()
-            limits_report = temp_root / "rlimit-unapplied"
             argv = [self.sandbox_exec, "-p", profile, *command]
-            process = subprocess.Popen(
-                argv,
-                cwd=root,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-                preexec_fn=lambda: _limit_process(self.limits, limits_report),
-            )
-            try:
-                stdout, stderr = process.communicate(timeout=timeout_seconds)
-                exit_code, timed_out = process.returncode, False
-            except subprocess.TimeoutExpired:
+            # limit適用報告はworktreeの外へ置く。profileはworktree配下への書込みを
+            # untrusted processへ許可しているため、worktree内に置くと「封じ込めが
+            # 効いているかの報告」を被検査プロセス自身が改ざんできてしまう。
+            with tempfile.TemporaryDirectory(prefix=".orc-limits-") as limits_dir:
+                limits_report = Path(limits_dir) / "rlimit-unapplied"
+                process = subprocess.Popen(
+                    argv,
+                    cwd=root,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                    preexec_fn=lambda: _limit_process(self.limits, limits_report),
+                )
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    if process.poll() is None:
-                        raise
-                stdout, stderr = process.communicate()
-                exit_code, timed_out = -9, True
-            unsupported = _read_unapplied_limits(limits_report)
+                    stdout, stderr = process.communicate(timeout=timeout_seconds)
+                    exit_code, timed_out = process.returncode, False
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        if process.poll() is None:
+                            raise
+                    stdout, stderr = process.communicate()
+                    exit_code, timed_out = -9, True
+                unsupported, limits_verified = _read_unapplied_limits(limits_report)
             if _disk_usage(root) - before > self.limits.disk_growth_bytes:
                 raise SandboxViolation("sandbox disk growth limit exceeded")
         denial = "deny(" in stderr or "operation not permitted" in stderr.lower()
         return SandboxResult(
-            tuple(command), exit_code, timed_out, stdout, stderr, self.profile_id, denial, unsupported
+            tuple(command),
+            exit_code,
+            timed_out,
+            stdout,
+            stderr,
+            self.profile_id,
+            denial,
+            unsupported,
+            limits_verified,
         )

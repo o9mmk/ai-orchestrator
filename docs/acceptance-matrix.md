@@ -34,7 +34,7 @@
 | Contract | 主なpytest node / opt-in smoke |
 |---|---|
 | Canonical / Codex transport schema分離 | `test_codex_transport_schema.py`, Planner/Attempt/Reviewの厳格fake provider |
-| 実provider互換 | `uv run --isolated --locked python ai-orchestrator/tests/provider_smoke.py --codex /absolute/path/to/codex`（最大2 invocation） |
+| 実provider互換 | `uv run --isolated --locked python tests/provider_smoke.py --codex /absolute/path/to/codex`（最大2 invocation） |
 | duplicate run-id不変条件 | `test_preflight.py::test_duplicate_run_id_is_rejected_before_lease_or_existing_run_change` |
 | dead owner回収 / live owner非強奪 | `test_lease.py::test_dead_lease_is_reclaimed_even_inside_ttl`, `test_lease.py::test_at17_second_run_is_refused_while_first_lease_is_live` |
 | cross-terminal cooperative cancel | `test_cancel_intent.py`（0600/O_EXCL、PGID停止、二重cancel、terminal intent、approve競合） |
