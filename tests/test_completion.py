@@ -21,6 +21,7 @@ def verify_report(classification: str = "PASS") -> dict:
                 "classification": classification,
                 "log_digest": "b" * 64,
                 "limits": {"verified": True, "unsupported": []},
+                "violation": None,
             }
         ],
         "scope_check": {"patch_files": ["app.py"], "in_scope": True},

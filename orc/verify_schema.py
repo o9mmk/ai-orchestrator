@@ -37,6 +37,7 @@ VERIFY_SCHEMA: dict[str, Any] = {
                     "classification",
                     "log_digest",
                     "limits",
+                    "violation",
                 ],
                 "properties": {
                     "name": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -87,6 +88,8 @@ VERIFY_SCHEMA: dict[str, Any] = {
                             },
                         },
                     },
+                    # 実行中に検知した違反の理由。Noneなら違反なし。
+                    "violation": {"type": ["string", "null"], "maxLength": 256},
                 },
             },
         },

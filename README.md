@@ -22,6 +22,9 @@ Codex / Claude を子プロセスとして起動して plan → 実装 → revie
 | 仕組み | 防いでいること | 実装 |
 | --- | --- | --- |
 | worktree 隔離 | 作業中の repo を壊す | `worktree.py` |
+| sandbox-exec + rlimit | untrusted なテスト/ビルドが network・worktree 外へ出る／対応する資源上限の適用と超過検知 | `sandbox.py`, `limit_launcher.py` |
+| 出力上限 | 大量出力で制限対象外の親プロセスを圧迫する | `sandbox.py` の `_pump_output` |
+| 実行中の違反の記録 | 出力超過・ディスク超過で停止した事実が監査記録から消える | `baseline.py`, `verify.json` の `gates[].violation` |
 | lease | 同一 repo への多重実行 | `lease.py` |
 | budget（soft / hard の二段） | 子プロセス起動の無限ループ | `budget.py` |
 | path lock / scope 分離 | 書き換え範囲の逸脱 | `path_locks.py`, `scope.py` |
@@ -46,6 +49,23 @@ resource 上限はプラットフォームによって構造的に適用でき�
 この報告は worktree の外に置く。sandbox profile は worktree 配下への書き込みを
 untrusted process へ許可しているため、報告を worktree 内に置くと、封じ込めが効いているかの
 記録を被検査プロセス自身が書き換えられてしまう。
+
+上限の適用そのものは `preexec_fn` ではなく、exec 後に独立プロセスとして動く
+`limit_launcher.py` が行う。fork 後・exec 前に Python コードを走らせる方式は、
+スレッドを持つ親からはデッドロックし得るためである。ランチャーは `python -I -S` で起動し
+（cwd・`PYTHONPATH`・site-packages の影響を受けない）、`sandbox-exec` の前段で上限を適用し、
+報告を一時ファイルに書いて `fsync` してから rename で公開し、対象コマンドへ exec する。
+途中で壊れた報告は `complete` フラグを持たないので「未適用なし」とは読まれず、
+ランチャー自体が失敗した実行は「確認不能」として `INCONCLUSIVE` に落ちる。
+
+保証の範囲も書いておく。stdout/stderr は親側で上限（既定 8 MiB ずつ）を設け、超過した時点で
+process group ごと停止する。ディスクは `RLIMIT_FSIZE` がファイル単位の上限で多数ファイルによる
+枯渇を防げないため、別スレッドが一定間隔（既定 5 秒）で worktree の増分を走査し、超過で停止する。
+子が stdout/stderr を閉じた後も、終了するまで期限とディスク監視は続く。これは quota のような
+即時の強制ではなく、走査時間と間隔分の遅れを持つ検知である。総メモリ・総ディスクの厳密な
+被害上限が必要なら、資源制限を強制できる VM 等の実行環境が要る。実行中の違反で停止した場合も
+停止までの部分結果を保持し、`verify.json` の `gates[].violation` に理由を記録して
+判定は `INCONCLUSIVE` にする。
 
 ## 使い方
 
@@ -95,10 +115,14 @@ ledger 済みの process group を TERM → grace → KILL で停止してから
 ## 開発
 
 ```bash
-uv run pytest        # 308 tests
+uv run pytest        # 321 tests
 uv run ruff check .
 uv run mypy          # strict
 ```
+
+## 作者
+
+岡田 賢揮 — [ポートフォリオ](https://o9mmk.github.io/) ／ [GitHub](https://github.com/o9mmk)
 
 ## ライセンス
 

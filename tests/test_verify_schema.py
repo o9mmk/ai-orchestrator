@@ -25,6 +25,7 @@ def valid_report() -> dict[str, object]:
                 "classification": "PASS",
                 "log_digest": "a" * 64,
                 "limits": {"verified": True, "unsupported": []},
+                "violation": None,
             }
         ],
         "scope_check": {"patch_files": ["src/a.py"], "in_scope": True},

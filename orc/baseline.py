@@ -8,7 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
-from orc.errors import TamperDetected
+from orc.errors import SandboxViolation, TamperDetected
 from orc.io_utils import canonical_json
 from orc.sandbox import SandboxResult
 from orc.store import RunStateStore
@@ -57,9 +57,11 @@ class GateRun:
     profile_id: str
     unsupported_limits: tuple[str, ...] = ()
     limits_verified: bool = False
+    # 実行中に検知した違反（出力超過・ディスク増分超過・監視失敗）。Noneなら違反なし。
+    violation: str | None = None
 
     @classmethod
-    def from_sandbox(cls, result: SandboxResult) -> GateRun:
+    def from_sandbox(cls, result: SandboxResult, *, violation: str | None = None) -> GateRun:
         """sandbox結果をdigest中心の監査recordへ変換する。"""
         return cls(
             result.exit_code,
@@ -69,6 +71,7 @@ class GateRun:
             result.profile_id,
             result.unsupported_limits,
             result.limits_verified,
+            violation,
         )
 
     def limits_enforced(self, allowed_unenforced: frozenset[str]) -> bool:
@@ -142,6 +145,10 @@ class GateDecision:
                     }
                 ),
             },
+            "violation": next(
+                (run.violation for run in (self.baseline, *self.candidate_attempts) if run.violation),
+                None,
+            ),
         }
 
 
@@ -207,9 +214,10 @@ class BaselineVerifier:
             else:
                 classification = GateClassification.BASELINE_FAILED
         if not all(
-            run.limits_enforced(self.allow_unenforced_limits) for run in (baseline, *attempts)
+            run.limits_enforced(self.allow_unenforced_limits) and run.violation is None
+            for run in (baseline, *attempts)
         ):
-            # 資源上限が効いていない状態で得た結果をPASSにすると、
+            # 資源上限が効いていない、または実行中に違反で停止した結果をPASSにすると、
             # 「上限を課したつもり」のまま先へ進んでしまう。人間の判断へ送る。
             classification = GateClassification.INCONCLUSIVE
         return GateDecision(spec, baseline, tuple(attempts), classification)
@@ -238,13 +246,15 @@ class BaselineVerifier:
         return result
 
     def _run(self, spec: GateSpec, worktree: Path) -> GateRun:
-        return GateRun.from_sandbox(
-            self.runner.run(
-                spec.command,
-                worktree,
-                timeout_seconds=spec.timeout_seconds,
-            )
-        )
+        try:
+            result = self.runner.run(spec.command, worktree, timeout_seconds=spec.timeout_seconds)
+        except SandboxViolation as error:
+            if not isinstance(error.result, SandboxResult):
+                # 起動前の境界違反（symlink等）は設定の問題なので、そのまま上げる。
+                raise
+            # 実行中の違反は監査記録に残す価値がある。結果として保持し、判定はINCONCLUSIVEへ。
+            return GateRun.from_sandbox(error.result, violation=str(error))
+        return GateRun.from_sandbox(result)
 
     def _cached_run(self, cached: dict[str, Any]) -> GateRun:
         result = cached.get("result")
@@ -256,6 +266,7 @@ class BaselineVerifier:
             "profile_id",
             "unsupported_limits",
             "limits_verified",
+            "violation",
         }
         if not isinstance(result, dict) or set(result) != required:
             raise TamperDetected("tamper_detected: invalid baseline cache result")
@@ -276,6 +287,7 @@ class BaselineVerifier:
             not isinstance(limits, list)
             or any(not isinstance(limit, str) for limit in limits)
             or not isinstance(result["limits_verified"], bool)
+            or not (result["violation"] is None or isinstance(result["violation"], str))
         ):
             raise TamperDetected("tamper_detected: invalid baseline limit report")
         # JSON往復でtupleがlistになるため、dataclassの型へ戻してから復元する。

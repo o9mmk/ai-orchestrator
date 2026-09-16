@@ -38,7 +38,16 @@ class SandboxUnavailable(OrchestratorError):
 
 
 class SandboxViolation(OrchestratorError):
-    """worktree境界・resource上限違反。"""
+    """worktree境界・resource上限違反。
+
+    実行中に検知した違反（出力超過・ディスク増分超過）は、停止までに得た部分結果を
+    ``result`` に伴う。監査記録から違反の事実と出力digestが消えないようにするため。
+    起動前に検知した違反（symlink等）は結果を持たない。
+    """
+
+    def __init__(self, message: str, *, result: object | None = None) -> None:
+        super().__init__(message)
+        self.result = result
 
 
 class VerificationError(OrchestratorError):

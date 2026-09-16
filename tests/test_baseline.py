@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from orc.baseline import BaselineVerifier, GateAction, GateClassification, GateSpec
+from orc.errors import SandboxViolation
 from orc.lease import LeaseManager
 from orc.sandbox import PLATFORM_UNENFORCEABLE_LIMITS, SandboxResult, SandboxRunner
 from orc.store import RunStateStore
@@ -288,3 +289,39 @@ def test_platform_unenforceable_limit_is_recorded_in_the_audit_trail(
         "verified": True,
         "unsupported": ["RLIMIT_AS"],
     }
+
+
+class ViolatingRunner:
+    """実行中の違反を部分結果つきで上げるtest double。"""
+
+    profile_id = "test-profile"
+
+    def run(
+        self,
+        command: list[str] | tuple[str, ...],
+        worktree: Path,
+        *,
+        timeout_seconds: int,
+    ) -> SandboxResult:
+        raise SandboxViolation(
+            "sandbox output limit exceeded",
+            result=_result(exit_code=-9, limits_verified=True),
+        )
+
+
+def test_runtime_violation_is_recorded_and_never_passes(
+    store: RunStateStore, tmp_path: Path
+) -> None:
+    """出力超過等で停止したgateは、監査記録に理由を残したうえでINCONCLUSIVEにする。"""
+    base = tmp_path / "base"
+    candidate = tmp_path / "candidate"
+    base.mkdir()
+    candidate.mkdir()
+    decision = BaselineVerifier(store, ViolatingRunner()).verify(
+        GateSpec("pytest", ("pytest", "-q"), timeout_seconds=10),
+        base_commit="a" * 40,
+        base_worktree=base,
+        candidate_worktree=candidate,
+    )
+    assert decision.classification is GateClassification.INCONCLUSIVE
+    assert decision.as_verify_gate()["violation"] == "sandbox output limit exceeded"

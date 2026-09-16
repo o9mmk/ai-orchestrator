@@ -35,7 +35,7 @@ schema済みの固定planを使う場合は`--plan-file plan.json`を指定し�
 
 ## 検証結果
 
-- `uv run --isolated --locked pytest`: 308 passed
+- `uv run --isolated --locked pytest`: 321 passed（2026-09-16、macOS 15 / CPython 3.13。本節の検証は本文書を更新したコミット時点）
 - `uv run --isolated --locked ruff check .`: passed
 - `uv run --isolated --locked mypy`: strict mode passed
 - `uv lock --check`: passed

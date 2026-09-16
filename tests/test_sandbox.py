@@ -2,12 +2,13 @@
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from orc.errors import SandboxViolation
-from orc.sandbox import SandboxRunner, scan_worktree_boundary
+from orc.sandbox import SandboxLimits, SandboxRunner, scan_worktree_boundary
 from orc.sandbox_poc import run_sandbox_poc
 
 
@@ -148,3 +149,98 @@ def test_limit_report_is_not_writable_by_the_inspected_process(tmp_path: Path) -
     if sys.platform == "darwin":
         # 改ざんを試みても、報告はworktree外にあるため実態どおりのまま残る。
         assert "RLIMIT_AS" in result.unsupported_limits
+
+
+def test_output_flood_is_stopped_at_the_cap(tmp_path: Path) -> None:
+    """子が上限を超える出力を吐いたら、蓄積し続けずprocess groupごと停止する。"""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    flood = "import sys\nwhile True:\n    sys.stdout.write('x' * 65536)\n    sys.stdout.flush()\n"
+    runner = SandboxRunner(limits=SandboxLimits(output_bytes=256 * 1024))
+    started = time.monotonic()
+    with pytest.raises(SandboxViolation, match="output limit"):
+        runner.run([sys.executable, "-c", flood], worktree, timeout_seconds=60)
+    # timeout(60s)を待たずに出力超過で止まっていること。
+    assert time.monotonic() - started < 30
+
+
+def test_disk_growth_is_detected_while_the_process_is_still_running(tmp_path: Path) -> None:
+    """RLIMIT_FSIZEに収まる多数ファイルでの肥大化を、終了を待たず実行中に検知する。"""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    grow = (
+        "import pathlib, time\n"
+        "for i in range(64):\n"
+        "    pathlib.Path(f'f{i}').write_bytes(b'0' * 65536)\n"
+        "time.sleep(60)\n"
+    )
+    runner = SandboxRunner(
+        limits=SandboxLimits(disk_growth_bytes=1024 * 1024, disk_check_seconds=0.5)
+    )
+    started = time.monotonic()
+    with pytest.raises(SandboxViolation, match="disk growth"):
+        runner.run([sys.executable, "-c", grow], worktree, timeout_seconds=60)
+    assert time.monotonic() - started < 30
+
+
+def test_limits_are_applied_by_the_launcher_not_by_preexec_fn() -> None:
+    """上限適用がfork後・exec前のPythonコールバックに依存していないこと。"""
+    source = Path(SandboxRunner.__module__.replace(".", "/") + ".py").read_text(encoding="utf-8")
+    assert "preexec_fn=" not in source
+    assert "limit_launcher" in source
+
+
+def test_child_that_closes_its_streams_still_hits_the_deadline(tmp_path: Path) -> None:
+    """stdout/stderrを閉じて走り続ける子に対しても、timeoutを期限どおり適用する。"""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    linger = "import os, time\nos.close(1)\nos.close(2)\ntime.sleep(60)\n"
+    started = time.monotonic()
+    result = SandboxRunner().run([sys.executable, "-c", linger], worktree, timeout_seconds=2)
+    assert result.timed_out is True
+    assert time.monotonic() - started < 15
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("", ((), False)),
+        ("not json", ((), False)),
+        ('{"version": 1, "unapplied": ["RLIMIT_AS"], "complete": false}', ((), False)),
+        ('{"version": 2, "unapplied": [], "complete": true}', ((), False)),
+        ('{"version": 1, "unapplied": ["RLIMIT_AS"], "complete": true}', (("RLIMIT_AS",), True)),
+        ('{"version": 1, "unapplied": [], "complete": true}', ((), True)),
+    ],
+)
+def test_torn_or_incomplete_limit_report_is_never_read_as_enforced(
+    tmp_path: Path, content: str, expected: tuple[tuple[str, ...], bool]
+) -> None:
+    """空ファイル・壊れたJSON・未完成の報告を「未適用なし」と読み替えない。"""
+    from orc.sandbox import _read_unapplied_limits
+
+    report = tmp_path / "report"
+    report.write_text(content, encoding="utf-8")
+    assert _read_unapplied_limits(report) == expected
+    assert _read_unapplied_limits(tmp_path / "missing") == ((), False)
+
+
+def test_disk_growth_is_detected_after_the_child_closes_its_streams(tmp_path: Path) -> None:
+    """stdout/stderrを閉じた後に肥大化する子も、終了を待たずに検知する。"""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    grow_after_close = (
+        "import os, pathlib, time\n"
+        "os.close(1)\nos.close(2)\n"
+        "for i in range(64):\n"
+        "    pathlib.Path(f'f{i}').write_bytes(b'0' * 65536)\n"
+        "time.sleep(60)\n"
+    )
+    runner = SandboxRunner(
+        limits=SandboxLimits(disk_growth_bytes=1024 * 1024, disk_check_seconds=0.5)
+    )
+    started = time.monotonic()
+    with pytest.raises(SandboxViolation, match="disk growth") as caught:
+        runner.run([sys.executable, "-c", grow_after_close], worktree, timeout_seconds=60)
+    assert time.monotonic() - started < 30
+    # 停止までの部分結果を伴い、監査記録へ残せる。
+    assert caught.value.result is not None
